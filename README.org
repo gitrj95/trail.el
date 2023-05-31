@@ -1,0 +1,65 @@
+#+title:breadcrumbs.el
+#+author:rj
+
+* motivation
+- jumping into function definitions when navigating code bases is a
+  fairly common operation with wide support
+  - eg =xref-find-definition=, plugged into [[https://github.com/joaotavora/eglot][eglot]], combines the power
+    of an lsp backend with emacs features to make this simple
+- however, there isn't an easy way to go backwards. namely, it's hard
+  to know where i've been, after jumping from function definition to
+  function definition, delving more deeply into the calls
+- in the absence of this package, the extant ways to do this seem to
+  be:
+  - =mark-ring=: does not seem desirable, as it pollutes intent
+  - [[https://github.com/alphapapa/dogears.el][dogears]] or [[https://github.com/Overdr0ne/gumshoe][gumshoe]]: both of these packages are great, and this
+    package is largely inspired by the two of these. however, i,
+    personally, have no interest in using either time or distance as a
+    signal for tracking positions. i am principally interested in:
+    - support for position tracking in live and killed buffers
+    - support for persisting the list of tracked positions between
+      emacs sessions
+    - well-defined navigation
+    - allowing arbitrary functions to track the before and after
+      positions around the call
+  - that last bit is most useful to my workflow, as when i'm trying to
+    understand a bit of code, i usually have to move projects into
+    some library definition - the semantics of which i am usually
+    unfamiliar, and i waste time trying to figure out how to walk
+    backwards
+- work with tramp
+
+* interface
+** configuration
+| name                              | description                                                                                |
+|-----------------------------------+--------------------------------------------------------------------------------------------|
+| =breadcrumbs-ring=                | the list of breadcrumbs, stored in a ring buffer. can be persisted via =savehist=          |
+| =breadcrumbs-ring-max=            | the number of breadcrumbs to track in =breadcrumbs-ring=                                   |
+| =breadcrumbs-drop-around-fn-list= | the list of functions, which, upon invocation, drop breadcrumbs before and after execution |
+** functions
+| name                                 | description                                                                                                                                                                              |
+|--------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =breadcrumbs-mode=                   | enables usage of breadcrumbs                                                                                                                                                             |
+| =breadcrumbs-drop-breadcrumb=        | drops a breadcrumb, ie tracks the position, of point in the current buffer. breadcrumbs in killed buffers, when jumped to, will open the pursuant file. if point is at a known breadcrumb, the existing breadcrumb will be moved to the head of the list |
+| =breadcrumbs-list=                   | displays the list of breadcrumbs in a separate buffer. breadcrumbs can be jumped to with "j" and "<RET>" and deleted with "k"                                                            |
+| =breadcrumbs-find-and-jump-next=     | jumps to the next breadcrumb given the breadcrumb at point. otherwise, do nothing                                                                                                        |
+| =breadcrumbs-find-and-jump-previous= | if point is at a known breadcrumb, jump to the previous breadcrumb. otherwise, jump to the most recently dropped or jumped to breadcrumb                                                 |
+* examples
+#+begin_example
+(use-package breadcrumbs
+  :custom
+  (breadcrumbs-drop-around-fn-list '(xref-find-definitions xref-find-references))
+  :init
+  (breadcrumbs-mode)
+  :bind
+  ("C-M-=" . breadcrumbs-drop-breadcrumb)
+  ("C-M-'" . breadcrumbs-list)
+  ("C-M-[" . breadcrumbs-find-and-jump-previous)
+  ("C-M-]". breadcrumbs-find-and-jump-next))
+
+(use-package savehist
+  :init
+  (savehist-mode)
+  (setq savehist-additional-variables
+        '(breadcrumbs-ring)))
+#+end_example

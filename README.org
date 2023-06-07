@@ -12,10 +12,12 @@
 - in the absence of this package, the extant ways to do this seem to
   be:
   - =mark-ring=: does not seem desirable, as it pollutes intent
+  - bookmarks: ditto
   - [[https://github.com/alphapapa/dogears.el][dogears]] or [[https://github.com/Overdr0ne/gumshoe][gumshoe]]: both of these packages are great, and this
     package is largely inspired by the two of these. however, i,
     personally, have no interest in using either time or distance as a
     signal for tracking positions. i am principally interested in:
+    - simplicity    
     - support for position tracking in live and killed buffers
     - support for persisting the list of tracked positions between
       emacs sessions
@@ -37,13 +39,13 @@
 | =breadcrumbs-ring-max=            | the number of breadcrumbs to track in =breadcrumbs-ring=                                   |
 | =breadcrumbs-drop-around-fn-list= | the list of functions, which, upon invocation, drop breadcrumbs before and after execution |
 ** functions
-| name                                 | description                                                                                                                                                                              |
-|--------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =breadcrumbs-mode=                   | enables usage of breadcrumbs                                                                                                                                                             |
+| name                                 | description                                                                                                                                                                                                                                              |
+|--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =breadcrumbs-mode=                   | enables usage of breadcrumbs                                                                                                                                                                                                                             |
 | =breadcrumbs-drop-breadcrumb=        | drops a breadcrumb, ie tracks the position, of point in the current buffer. breadcrumbs in killed buffers, when jumped to, will open the pursuant file. if point is at a known breadcrumb, the existing breadcrumb will be moved to the head of the list |
-| =breadcrumbs-list=                   | displays the list of breadcrumbs in a separate buffer. breadcrumbs can be jumped to with "j" and "<RET>" and deleted with "k"                                                            |
-| =breadcrumbs-find-and-jump-next=     | jumps to the next breadcrumb given the breadcrumb at point. otherwise, do nothing                                                                                                        |
-| =breadcrumbs-find-and-jump-previous= | if point is at a known breadcrumb, jump to the previous breadcrumb. otherwise, jump to the most recently dropped or jumped to breadcrumb                                                 |
+| =breadcrumbs-list=                   | displays the list of breadcrumbs in a separate buffer. breadcrumbs can be jumped to with "<RET>" and deleted with "k"                                                                                                                                    |
+| =breadcrumbs-find-and-jump-next=     | jumps to the next breadcrumb given the breadcrumb at point. otherwise, do nothing                                                                                                                                                                        |
+| =breadcrumbs-find-and-jump-previous= | if point is at a known breadcrumb, jump to the previous breadcrumb. otherwise, jump to the most recently dropped or jumped to breadcrumb                                                                                                                 |
 * examples
 #+begin_example
 (use-package breadcrumbs

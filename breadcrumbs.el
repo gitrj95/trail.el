@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2023  Ramakrishnan Jayaraman
 
-;; Version: 0.0.1
+;; Version: 0.1.0
 ;; Author: Ramakrishnan Jayaraman <chat@rj95.be>
 ;; Maintainer: Ramakrishnan Jayaraman <chat@rj95.be>
 ;; URL: https://github.com/gitrj95/breadcrumbs.el
@@ -35,9 +35,9 @@
 ;; https://github.com/gitrj95/breadcrumbs.el
 ;;
 ;; In order to use breadcrumbs, `breadcrumbs-mode' must be enabled.
-;;
-;; Interface:
-;;
+
+;;;; Interface:
+
 ;; `breadcrumbs-drop-breadcrumb' adds the current position in the
 ;; buffer to a ring.  If point is at a known breadcrumb, the existing
 ;; breadcrumb will be moved to the head of the ring.  Adding
@@ -59,128 +59,172 @@
 ;;; Code:
 
 (require 'ring)
-(require 'eieio)
+(require 'cl-lib)
 (require 'pulse)
 
+(defgroup breadcrumbs ()
+  "Track and navigate among buffer positions."
+  :group 'convenience
+  :prefix "breadcrumbs-")
+
 (defvar breadcrumbs-ring nil
-  "All dropped breadcrumbs, up to `breadcrumb-ring-max' breadcrumbs.")
+  "The collection of all tracked buffer positions up to `breadcrumb-ring-max'.")
 
 (defcustom breadcrumb-ring-max 20
-  "The maximum number of breadcrumbs to track."
+  "The maximum number of buffer positions to track."
   :type 'natnum
   :group 'breadcrumbs)
 
 (defcustom breadcrumbs-drop-around-fn-list nil
-  "The list of functions for which a breadcrumb is dropped before invocation."
+  "The list of functions for which buffer positions are tracked, before and after invocation."
   :type 'list
   :group 'breadcrumbs)
 
 (defvar breadcrumbs--neighbor nil
-  "The most recently dropped or jumped to breadcrumb.")
+  "The most recently dropped or jumped to buffer position via the breadcrumbs interface.")
 
 (defvar breadcrumbs-list-buffer nil
   "The \"*Breadcrumbs List*\" buffer.")
 
-(defclass breadcrumbs--breadcrumb ()
-  ((buffer-file-name
-    :initform (buffer-file-name)
-    :documentation "The full file path of this breadcrumb.")
-   (buffer-position
-    :initform (point)
-    :documentation "Position in buffer."))
-  "The breadcrumb definition.")
+(cl-defstruct breadcrumbs--breadcrumb
+  "The breadcrumb definition.
+
+Namely, an aggregate of the file backing the buffer, the position
+in the buffer, and the buffer's name.  The last member is
+exercised only if the buffer has no associated file, relying on
+`find-file' semantics otherwise."
+  (buffer-file-name
+   (buffer-file-name)
+   :documentation "The file backing the breadcrumb.")
+  (buffer-position
+   (point)
+   :documentation "Buffer position of the breadcrumb.")
+  (fileless-buffer-name
+   (buffer-name)
+   :documentation "Buffer name, exercised only when buffer is fileless."))
 
 (defun breadcrumbs--setup ()
-  "Set up the state required to start using breadcrumbs."
-  (if (not breadcrumbs-ring)
-      (setq breadcrumbs-ring (make-ring breadcrumb-ring-max)))
-  (mapcar (lambda (fn)
-            (advice-add fn :around #'breadcrumbs--drop-around)) breadcrumbs-drop-around-fn-list))
+  "Set up the state required to start using breadcrumbs.
+
+To accommodate `savehist' or any other package that can set
+`breadcrumbs-ring', it's initialized to an empty ring conditioned
+on its value at the time of call.
+
+Advice is added \"around\" the specified functions in
+`breadcrumbs-drop-around-fn-list' as well."
+  (unless breadcrumbs-ring
+    (setq breadcrumbs-ring (make-ring breadcrumb-ring-max)))
+  (dolist (fn breadcrumbs-drop-around-fn-list)
+    (advice-add fn :around #'breadcrumbs--drop-around)))
 
 (defun breadcrumbs--teardown ()
-  "Tear down the state required for breadcrumbs."
-  (setq breadcrumbs-ring nil)
-  (setq breadcrumbs--neighbor nil)
-  (mapcar (lambda (fn)
-            (advice-remove fn #'breadcrumbs--drop-around)) breadcrumbs-drop-around-fn-list))
+  "Tear down the state required for breadcrumbs.
+
+Namely, we reset all state breadcrumbs uses and remove the advice
+associated with `breadcrumbs-drop-around-fn-list'."
+  (setq breadcrumbs-ring nil
+        breadcrumbs--neighbor nil)
+  (dolist (fn breadcrumbs-drop-around-fn-list)
+    (advice-remove fn #'breadcrumbs--drop-around)))
+
+(defun breadcrumbs--switch-to-fileless-buffer (breadcrumb)
+  "Attempt to switch to the buffer of a fileless BREADCRUMB, if it exists.
+
+If not, optionally remove it from `breadcrumbs-ring'."
+  (if-let* ((buffer-name (breadcrumbs--breadcrumb-fileless-buffer-name breadcrumb))
+            (buffer (get-buffer buffer-name)))
+      (switch-to-buffer buffer)
+    (when (yes-or-no-p (format "%s has been killed.  Remove this breadcrumb from `breadcrumbs-ring'? " buffer-name))
+      (ring-remove breadcrumbs-ring (ring-member breadcrumbs-ring breadcrumb))
+      (breadcrumbs-list--revert)
+      nil)))
 
 (defun breadcrumbs--jump (breadcrumb)
-  "Jump to the specified breadcrumb."
+  "Jump to the specified buffer and position as specified by BREADCRUMB."
   (setq breadcrumbs--neighbor breadcrumb)
-  (with-slots (buffer-file-name buffer-position) breadcrumb
-      (find-file-existing buffer-file-name)
-      (goto-char buffer-position)
+  (when
+      (cond
+       ((breadcrumbs--breadcrumb-buffer-file-name breadcrumb)
+        (find-file (breadcrumbs--breadcrumb-buffer-file-name breadcrumb)))
+       ((breadcrumbs--breadcrumb-fileless-buffer-name breadcrumb)
+        (breadcrumbs--switch-to-fileless-buffer breadcrumb)))
+    (goto-char (breadcrumbs--breadcrumb-buffer-position breadcrumb))
     (pulse-momentary-highlight-one-line)))
 
 (defun breadcrumbs--drop ()
-  "Drop a breadcrumb at point, moving an existing one if it already exists."
-  (let* ((breadcrumb (make-instance 'breadcrumbs--breadcrumb))
+  "Track the buffer position as a `breadcrumbs--breadcrumb'.
+
+If this has already been tracked, move an existing one in `breadcrumbs-ring' to head."
+  (let* ((breadcrumb (make-breadcrumbs--breadcrumb))
          (index (ring-member breadcrumbs-ring breadcrumb)))
     (setq breadcrumbs--neighbor breadcrumb)
-    (if index (ring-remove breadcrumbs-ring index))
+    (when index (ring-remove breadcrumbs-ring index))
     (ring-insert breadcrumbs-ring breadcrumb))
   (breadcrumbs-list--revert)
   (pulse-momentary-highlight-one-line))
 
 (defun breadcrumbs--drop-around (fn &rest args)
-  "Drop breadcrumbs before and after the function call."
+  "Track the buffer position before and after FN is invoked with ARGS and return its last form."
   (breadcrumbs--drop)
   (let ((result (apply fn args)))
     (breadcrumbs--drop)
     result))
 
-(defun breadcrumbs--find-and-jump (&key direction)
-  "Find some candidate breadcrumb and jump to the next or previous, based on `direction'."
+(defun breadcrumbs--find-and-jump (&rest args)
+  "Jump to the next or previous buffer position based on a direction gleaned from ARGS."
   (let ((jump-target
-         (let ((candidate (make-instance 'breadcrumbs--breadcrumb)))
-           (if (ring-member breadcrumbs-ring candidate)
-               candidate))))
+         (let ((candidate (make-breadcrumbs--breadcrumb)))
+           (and (ring-member breadcrumbs-ring candidate) candidate)))
+	(direction (plist-get args :type)))
     (cond (jump-target
            (breadcrumbs--jump
             ;; our next/previous semantics are reversed from ring's
             (cond ((eq direction 'next) (ring-previous breadcrumbs-ring jump-target))
                   ((eq direction 'previous) (ring-next breadcrumbs-ring jump-target)))))
           (breadcrumbs--neighbor
-           (if (eq direction 'previous)
-               (breadcrumbs--jump breadcrumbs--neighbor))))))
+           (when (eq direction 'previous)
+             (breadcrumbs--jump breadcrumbs--neighbor))))))
 
 ;;;###autoload
 (define-minor-mode breadcrumbs-mode
-  "Track positions in buffers and files using breadcrumbs."
+  "Track positions in buffers using breadcrumbs."
   :global t
-  :init-value t
   (if breadcrumbs-mode
       (breadcrumbs--setup)
     (breadcrumbs--teardown)))
 
 (defvar breadcrumbs-list-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map tabulated-list-mode-map)
-    (define-key map (kbd "j") #'breadcrumbs-list-jump)
     (define-key map (kbd "<RET>") #'breadcrumbs-list-jump)
     (define-key map (kbd "k") #'breadcrumbs-list-delete)
     map)
   "The key map while in the \"*Breadcrumbs List*\" buffer.")
 
 (defun breadcrumbs--format-slot (slot len)
-  "Formats a breadcrumbs slot."
-  (let ((format-string (format "%%-%ss" len)))
-    (format format-string
-            (if slot slot ""))))
+  "Formats a `breadcrumbs--breadcrumb' SLOT given the LEN it will be left-aligned against."
+  (let ((format-string (format "%%-%ds" len)))
+    (format format-string (or slot ""))))
 
 (defun breadcrumbs--format-breadcrumb (breadcrumb)
-  "Return a formatted breadcrumb as a vector of formatted slots."
-  (with-slots (buffer-file-name buffer-position) breadcrumb
+  "Return BREADCRUMB's formatted slots as a vector.
+
+The structure of this return type is to conform with members of
+`tabulated-list-entries'."
+  (let* ((buffer-file-name (breadcrumbs--breadcrumb-buffer-file-name breadcrumb))
+	 (buffer-position (breadcrumbs--breadcrumb-buffer-position breadcrumb))
+         (buffer-name (breadcrumbs--breadcrumb-fileless-buffer-name breadcrumb))
+         (breadcrumb-name (or buffer-file-name buffer-name)))
     (vector
-     (breadcrumbs--format-slot buffer-file-name 64)
+     (breadcrumbs--format-slot breadcrumb-name 64)
      (breadcrumbs--format-slot buffer-position 16))))
 
 (defun breadcrumbs-list--entries ()
-  "Return `tabulated-list-entries' as a collection of breadcrumbs."
+  "Return `tabulated-list-entries' as a collection of formatted `breadcrumbs--breadcrumb' instances keyed on the instance."
   (mapcar (lambda (breadcrumb)
             (list
              breadcrumb
-             (breadcrumbs--format-breadcrumb breadcrumb))) (ring-elements breadcrumbs-ring)))
+             (breadcrumbs--format-breadcrumb breadcrumb)))
+          (ring-elements breadcrumbs-ring)))
 
 (defun breadcrumbs-list--revert ()
   "Reverts `breadcrumbs-list-buffer'."
@@ -189,38 +233,34 @@
       (tabulated-list-revert))))
 
 (define-derived-mode breadcrumbs-list-mode tabulated-list-mode
-  "Tabular list mode displaying tracked breadcrumbs."
-  (setq-local tabulated-list-format
-              `[("File" 64) ("Position" 16)])
-  (add-hook 'tabulated-list-revert-hook
-            (lambda ()
-              (setf tabulated-list-entries (breadcrumbs-list--entries))))
-  (tabulated-list-init-header)
-  (breadcrumbs-list--revert))
+  "Tabular list mode displaying tracked buffer positions."
+  (setq-local tabulated-list-entries #'breadcrumbs-list--entries
+	      tabulated-list-format `[("Name" 64) ("Position" 16)])
+  (tabulated-list-init-header))
 
 (defun breadcrumbs-list-jump ()
-  "Jump to breadcrumb from \"*Breadcrumbs List*\"."
+  "Jump to buffer position from \"*Breadcrumbs List*\"."
   (interactive)
   (breadcrumbs--jump (tabulated-list-get-id)))
 
 (defun breadcrumbs-list-delete ()
-  "Delete a breadcrumb from \"*Breadcrumbs List*\"."
+  "Delete a buffer position from \"*Breadcrumbs List*\"."
   (interactive)
   (ring-remove breadcrumbs-ring
                (ring-member breadcrumbs-ring (tabulated-list-get-id)))
-  (if (ring-empty-p breadcrumbs-ring)
-      (setq breadcrumbs--neighbor nil))
+  (when (ring-empty-p breadcrumbs-ring)
+    (setq breadcrumbs--neighbor nil))
   (breadcrumbs-list--revert))
 
 ;;;###autoload
 (defun breadcrumbs-drop-breadcrumb ()
-  "Drop a breadcrumb at point."
+  "Track the buffer position at point."
   (interactive)
   (breadcrumbs--drop))
 
 ;;;###autoload
 (defun breadcrumbs-list ()
-  "Show the list of breadcrumbs."
+  "Show the list of tracked buffer positions."
   (interactive)
   (with-current-buffer (get-buffer-create "*Breadcrumbs List*")
     (setf breadcrumbs-list-buffer (current-buffer))
@@ -229,13 +269,18 @@
 
 ;;;###autoload
 (defun breadcrumbs-find-and-jump-next ()
-  "Jump to the next breadcrumb from the breadcrumb at point."
+  "Jump to the next, tracked buffer position as of the current buffer position.
+
+If `point' is not at a tracked buffer position, do nothing."
   (interactive)
   (breadcrumbs--find-and-jump :type 'next))
 
 ;;;###autoload
 (defun breadcrumbs-find-and-jump-previous ()
-  "Jump to the previous breadcrumb from the breadcrumb at point."
+  "Jump to the previous, tracked buffer position as of the current buffer position.
+
+If `point' is not at a tracked buffer position, jump to the most
+recently dropped or jumped to buffer position."
   (interactive)
   (breadcrumbs--find-and-jump :type 'previous))
 

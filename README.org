@@ -1,4 +1,4 @@
-#+title:breadcrumbs.el
+#+title:trail.el
 #+author:rj
 
 * motivation
@@ -6,22 +6,29 @@
   fairly common operation with wide support
   - eg =xref-find-definition=, plugged into [[https://github.com/joaotavora/eglot][eglot]], combines the power
     of an lsp backend with emacs features to make this simple
-- however, there isn't an easy way to go backwards. namely, it's hard
-  to know where i've been, after jumping from function definition to
-  function definition, delving more deeply into the calls
+- however, there isn't an intuitive, customizable mechanism for
+  navigating backwards, or more generally, with ring
+  semantics. namely, it's hard to know where i've been, after jumping
+  from function definition to function definition, delving more deeply
+  into the calls
 - in the absence of this package, the extant ways to do this seem to
   be:
+  - =xref-go-back= and =xref-go-forward=: the navigation semantics aren't
+    that intuitive (stack-based) and, more importantly, users cannot
+    add custom entries
   - =mark-ring=: does not seem desirable, as it pollutes intent
   - bookmarks: ditto
   - [[https://github.com/alphapapa/dogears.el][dogears]] or [[https://github.com/Overdr0ne/gumshoe][gumshoe]]: both of these packages are great, and this
     package is largely inspired by the two of these. however, i,
     personally, have no interest in using either time or distance as a
     signal for tracking positions. i am principally interested in:
-    - simplicity    
     - support for position tracking in live and killed buffers
+    - support for relative position tracking using marker semantics,
+      so changes before and after a tracked position do not
+      inadvertently move it
     - support for persisting the list of tracked positions between
-      emacs sessions
-    - well-defined navigation
+      emacs sessions, which raw markers do not allow
+    - well-defined, ring-based navigation
     - allowing arbitrary functions to track the before and after
       positions around the call
   - that last bit is most useful to my workflow, as when i'm trying to
@@ -33,35 +40,39 @@
 
 * interface
 ** configuration
-| name                              | description                                                                                |
-|-----------------------------------+--------------------------------------------------------------------------------------------|
-| =breadcrumbs-ring=                | the list of breadcrumbs, stored in a ring buffer. can be persisted via =savehist=          |
-| =breadcrumbs-ring-max=            | the number of breadcrumbs to track in =breadcrumbs-ring=                                   |
-| =breadcrumbs-drop-around-fn-list= | the list of functions, which, upon invocation, drop breadcrumbs before and after execution |
+| name                        | description                                                                                                             |
+|-----------------------------+-------------------------------------------------------------------------------------------------------------------------|
+| =trail-ring=                  | the list of trail-marks, stored in a ring buffer. can be persisted via =savehist=, but needs to serialize with =trail-mode= |
+| =trail-ring-max=              | the number of trail-marks to track in =trail-ring=                                                                        |
+| =trail-mark-around-functions= | the list of functions, which, upon invocation, mark along the trail before and after execution                          |
 ** functions
-| name                                 | description                                                                                                                                                                                                                                              |
-|--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =breadcrumbs-mode=                   | enables usage of breadcrumbs                                                                                                                                                                                                                             |
-| =breadcrumbs-drop-breadcrumb=        | drops a breadcrumb, ie tracks the position, of point in the current buffer. breadcrumbs in killed buffers, when jumped to, will open the pursuant file. if point is at a known breadcrumb, the existing breadcrumb will be moved to the head of the list |
-| =breadcrumbs-list=                   | displays the list of breadcrumbs in a separate buffer. breadcrumbs can be jumped to with "<RET>" and deleted with "k"                                                                                                                                    |
-| =breadcrumbs-find-and-jump-next=     | jumps to the next breadcrumb given the breadcrumb at point. otherwise, do nothing                                                                                                                                                                        |
-| =breadcrumbs-find-and-jump-previous= | if point is at a known breadcrumb, jump to the previous breadcrumb. otherwise, jump to the most recently dropped or jumped to breadcrumb                                                                                                                 |
+| name                         | description                                                                                                                                                                                                                                 |
+|------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =trail-mode=                   | enables usage of trail                                                                                                                                                                                                                      |
+| =trail-mark=                   | marks along the trail, ie tracks the position, of point in the current buffer. trail-marks in killed buffers, when jumped to, will open the pursuant file. if point is at a known trail-mark, the existing trail-mark will be moved to the head of the list |
+| =trail-list=                   | displays the list of trail-marks in a separate buffer. trail-marks can be jumped to with "<RET>", deleted with "k", expanded with "e", and searched with full names using completing-read with "j". "r" jumps to the line with the most recently marked or jumped-to position |
+| =trail-find-and-jump-next=     | jumps to the next trail-mark given the trail-mark at point. otherwise, do nothing                                                                                                                                                           |
+| =trail-find-and-jump-previous= | if point is at a known trail-mark, jump to the previous trail-mark. otherwise, jump to the most recently marked or jumped-to position                                                                                                       |
 * examples
 #+begin_example
-(use-package breadcrumbs
+(use-package trail
+  ;; if using a persistence/restoration mechanism, the restoration of
+  ;; trail-ring must happen before trail-mode is enabled
+  :after savehist
   :custom
-  (breadcrumbs-drop-around-fn-list '(xref-find-definitions xref-find-references))
+  (trail-mark-around-functions '(xref-find-definitions xref-find-references))
+  (trail-ring-max 100)
   :init
-  (breadcrumbs-mode)
+  (trail-mode)
   :bind
-  ("C-M-=" . breadcrumbs-drop-breadcrumb)
-  ("C-M-'" . breadcrumbs-list)
-  ("C-M-[" . breadcrumbs-find-and-jump-previous)
-  ("C-M-]". breadcrumbs-find-and-jump-next))
+  ("C-M-=" . trail-mark)
+  ("C-M-'" . trail-list)
+  ("C-M-[" . trail-find-and-jump-previous)
+  ("C-M-]" . trail-find-and-jump-next))
 
 (use-package savehist
   :init
   (savehist-mode)
   (setq savehist-additional-variables
-        '(breadcrumbs-ring)))
+        '(trail-ring)))
 #+end_example

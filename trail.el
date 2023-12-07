@@ -313,6 +313,12 @@ and the next `trail-mark' is nil and not a valid jump target."
     map)
   "The key map while in the \"*Trail List*\" buffer.")
 
+(defvar-keymap trail-mode-repeat-map
+  :doc "Keymap to repeat `trail-find-and-jump-previous' and `trail-find-and-jump-next'.  Used in `repeat-mode'."
+  :repeat t
+  "[" #'trail-find-and-jump-previous
+  "]" #'trail-find-and-jump-next)
+
 (defun trail--format-full-contents (index)
   "Format the `trail-mark' given an INDEX into `trail-ring' and `trail--mark-ring'.
 
